@@ -97,7 +97,11 @@ func (m *Manager) handleExecute(request []byte) ([]byte, error) {
 		return classEnvelope(eErr), nil
 	}
 	debugTrace("executor session mode=%s source_format=%s x_opencode_session=%s fallback=%t", "non-stream", req.SourceFormat, sessionID, sessionID == emptyOpenCodeSessionID)
-	upstreamBody, eErr := buildUpstreamRequest(res.rec.Protocol, res.rec.UpstreamID, req.SourceFormat, req.OriginalRequest, res.rec.Thinking)
+	sourceBody, names, eErr := prepareToolNamespaces(res.rec.Protocol, req.SourceFormat, req.OriginalRequest)
+	if eErr != nil {
+		return classEnvelope(eErr), nil
+	}
+	upstreamBody, eErr := buildUpstreamRequest(res.rec.Protocol, res.rec.UpstreamID, req.SourceFormat, sourceBody, res.rec.Thinking)
 	if eErr != nil {
 		return classEnvelope(eErr), nil
 	}
@@ -129,7 +133,7 @@ func (m *Manager) handleExecute(request []byte) ([]byte, error) {
 	if eErr != nil {
 		return classEnvelope(eErr), nil
 	}
-	return okEnvelope(pluginapi.ExecutorResponse{Payload: converted, Headers: resp.Headers}), nil
+	return okEnvelope(pluginapi.ExecutorResponse{Payload: names.restoreJSON(converted), Headers: resp.Headers}), nil
 }
 
 func buildUpstreamRequest(route catalog.Route, upstreamModel, sourceFormat string, sourceBody []byte, ts *pluginapi.ThinkingSupport) ([]byte, *errclass.Error) {
@@ -361,7 +365,11 @@ func (m *Manager) executeStream(req executorRequest) ([]byte, error) {
 		return classEnvelope(eErr), nil
 	}
 	debugTrace("executor session mode=%s source_format=%s x_opencode_session=%s fallback=%t", "stream", req.SourceFormat, sessionID, sessionID == emptyOpenCodeSessionID)
-	upstreamBody, eErr := buildUpstreamRequest(res.rec.Protocol, res.rec.UpstreamID, req.SourceFormat, req.OriginalRequest, res.rec.Thinking)
+	sourceBody, names, eErr := prepareToolNamespaces(res.rec.Protocol, req.SourceFormat, req.OriginalRequest)
+	if eErr != nil {
+		return classEnvelope(eErr), nil
+	}
+	upstreamBody, eErr := buildUpstreamRequest(res.rec.Protocol, res.rec.UpstreamID, req.SourceFormat, sourceBody, res.rec.Thinking)
 	if eErr != nil {
 		return classEnvelope(eErr), nil
 	}
@@ -393,12 +401,12 @@ func (m *Manager) executeStream(req executorRequest) ([]byte, error) {
 		if m.bridge != nil {
 			defer m.bridge.inFlight.Done()
 		}
-		m.pumpStream(downID, id, res, req.SourceFormat)
+		m.pumpStream(downID, id, res, req.SourceFormat, names)
 	}()
 	return okEnvelope(struct{}{}), nil
 }
 
-func (m *Manager) pumpStream(downID, upstreamID string, res *resolvedExecution, sourceFormat string) {
+func (m *Manager) pumpStream(downID, upstreamID string, res *resolvedExecution, sourceFormat string, names toolNamespaces) {
 	var closeOnce sync.Once
 	closeStreams := func(downErrMsg string) {
 		closeOnce.Do(func() {
@@ -452,7 +460,7 @@ func (m *Manager) pumpStream(downID, upstreamID string, res *resolvedExecution, 
 			closeStreams(errclass.Redact(convErr.Message))
 			return
 		}
-		if emitErr := m.emitAll(downID, events); emitErr != nil {
+		if emitErr := m.emitAll(downID, names.restoreEvents(events)); emitErr != nil {
 			closeStreams(errclass.Redact(emitErr.Error()))
 			return
 		}
@@ -465,7 +473,7 @@ func (m *Manager) pumpStream(downID, upstreamID string, res *resolvedExecution, 
 	if !convDone && upstreamClosed {
 		if flusher, ok := conv.(interface{ Flush() [][]byte }); ok {
 			flushed := flusher.Flush()
-			if emitErr := m.emitAll(downID, flushed); emitErr != nil {
+			if emitErr := m.emitAll(downID, names.restoreEvents(flushed)); emitErr != nil {
 				closeStreams(errclass.Redact(emitErr.Error()))
 				return
 			}
