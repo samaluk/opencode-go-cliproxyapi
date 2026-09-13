@@ -114,6 +114,7 @@ plugins:
 | `api-keys` | `[]object` | *(Required)* | List of API keys (`- value: "..."`). Supports `${ENV_VAR}` expansion. Duplicates and empty values are rejected. |
 | `base-url` | `string` | `https://opencode.ai/zen/go/v1` | Upstream base URL. Must be valid HTTPS (or HTTP if `allow-http: true`) without query parameters, fragments, or userinfo. |
 | `catalog-url` | `string` | `{base-url}/models` | Full URL for catalog discovery. Defaults to `{base-url}/models`. |
+| `catalog-file` | `string` | unset | Absolute path to a local JSON catalog, using the same `{"data":[...]}` shape and metadata fields as remote discovery. Mutually exclusive with `catalog-url`. Reads the file at startup and each catalog refresh; makes no catalog HTTP requests. The usual size limit and stale policy apply. |
 | `model-prefix.enabled` | `bool` | `true` | When `true`, client-facing model names use `<prefix>/<model>`. When `false`, uses bare model IDs. |
 | `model-prefix.value` | `string` | `opencode-go` | Provider prefix string when prefixing is enabled. |
 | `catalog.refresh-interval` | `duration` | `15m` | Interval between catalog polling refreshes (e.g. `15m`, `1h`). Minimum is `1m`. |
