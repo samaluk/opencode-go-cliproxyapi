@@ -499,10 +499,9 @@ func TestFromClaudeMessagesAbsentSystemAndNullContent(t *testing.T) {
 func TestClaudeUnknownRoleRejected(t *testing.T) {
 	body := []byte(`{"max_tokens":10,"messages":[` +
 		`{"role":"user","content":"hi"},{"role":"system","content":"mid-history"}]}`)
-	_, eErr := BuildRequest("m", "claude", body, nil)
-	if eErr == nil || eErr.Class != errclass.ClassUnsupported ||
-		eErr.Message != `unsupported message role "system" for /v1/responses` {
-		t.Fatalf("mid-history system = %+v", eErr)
+	out, eErr := BuildRequest("m", "claude", body, nil)
+	if eErr != nil || !strings.Contains(string(out), `"role":"system"`) {
+		t.Fatalf("mid-history system must remain in place: %s, %+v", out, eErr)
 	}
 
 	_, eErr = BuildRequest("m", "claude",

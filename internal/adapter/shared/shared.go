@@ -930,6 +930,12 @@ func (r *ResponsesRequest) DecodeInputItems() ([]RespItem, *errclass.Error) {
 	if err := json.Unmarshal(r.Input, &items); err != nil {
 		return nil, errclass.Translation("input must be a string or an array of items: " + err.Error())
 	}
+	// Responses easy input messages omit type (for example Pi's first user turn).
+	for i := range items {
+		if items[i].Type == "" && items[i].Role != "" {
+			items[i].Type = "message"
+		}
+	}
 	return items, nil
 }
 
@@ -1148,6 +1154,19 @@ type ClaudeMessageRecord struct {
 	Role    string
 	Content string
 	Blocks  []ClaudeBlock
+}
+
+// ClaudeSystemMessageText preserves Claude Code's in-history environment
+// messages without moving them ahead of previous turns or dropping blocks.
+func ClaudeSystemMessageText(message ClaudeMessageRecord, target string) (string, *errclass.Error) {
+	parts := []string{message.Content}
+	for _, block := range message.Blocks {
+		if block.Kind != "text" {
+			return "", UnsupportedPartType(block.Kind, target)
+		}
+		parts = append(parts, block.Text)
+	}
+	return strings.Join(parts, ""), nil
 }
 
 // ClaudeRequestRecord is the normalized decode of an inbound Anthropic
