@@ -130,8 +130,8 @@ func TestResponsesSynthesisRouteParity(t *testing.T) {
 			t.Errorf("synthesized stream missing %s", want)
 		}
 	}
-	if strings.Count(a, "data: ") != 7 {
-		t.Errorf("event count = %d, want 7 (created, 2 added, text delta, 2 args deltas, completed)",
+	if strings.Count(a, "data: ") != 9 {
+		t.Errorf("event count = %d, want 9 (created, 2 added, text delta, 2 args deltas, 2 item done, completed)",
 			strings.Count(a, "data: "))
 	}
 }

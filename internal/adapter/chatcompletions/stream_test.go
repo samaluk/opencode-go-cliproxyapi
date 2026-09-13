@@ -537,10 +537,10 @@ func TestStreamConverterResponses(t *testing.T) {
 		t.Fatalf("response.completed must be deferred past finish_reason: %v", evs)
 	}
 	evs = feedAll(t, sc, `data: {"choices":[{"delta":{},"finish_reason":"length"}]}`)
-	if len(evs) != 1 || evs[0].Name != "response.completed" {
+	if len(evs) != 3 || evs[0].Name != "response.output_item.done" || evs[1].Name != "response.output_item.done" || evs[2].Name != "response.completed" {
 		t.Fatalf("completed event wrong: %v", evs)
 	}
-	resp := evs[0].Data["response"].(map[string]any)
+	resp := evs[2].Data["response"].(map[string]any)
 	if resp["id"] != "r1" || resp["object"] != "response" || resp["status"] != "completed" {
 		t.Fatalf("completed response wrong: %v", resp)
 	}
@@ -944,10 +944,10 @@ func TestStreamConverterFlushAfterFinishWithoutDONE(t *testing.T) {
 			`data: {"id":"r2","choices":[{"delta":{"role":"assistant","content":"x"}}]}`,
 			`data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":4}}`)
 		flushed := parseEvents(t, sc.Flush())
-		if len(flushed) != 1 || flushed[0].Name != "response.completed" {
+		if len(flushed) != 2 || flushed[0].Name != "response.output_item.done" || flushed[1].Name != "response.completed" {
 			t.Fatalf("flush = %v", flushed)
 		}
-		resp := flushed[0].Data["response"].(map[string]any)
+		resp := flushed[1].Data["response"].(map[string]any)
 		u := resp["usage"].(map[string]any)
 		if u["input_tokens"] != float64(3) || u["output_tokens"] != float64(4) {
 			t.Fatalf("flushed completed usage wrong: %v", resp)
