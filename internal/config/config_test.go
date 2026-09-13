@@ -1,6 +1,7 @@
 package config
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,19 @@ func requireErrContains(t *testing.T, err error, want string) {
 // withKey satisfies the at-least-one-key rule (spec 04 §3) for fixtures
 // that target a later validation check.
 const withKey = "api-keys:\n  - value: sk-dummy\n"
+
+func TestCatalogFileConfiguration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "models.json")
+	cfg, err := Load([]byte(withKey + "catalog-file: '" + path + "'\n"))
+	if err != nil || cfg.CatalogFile != path {
+		t.Fatalf("file config failed: %+v %v", cfg, err)
+	}
+	for _, extra := range []string{"catalog-file: ''\n", "catalog-file: relative.json\n", "catalog-file: '" + path + "'\ncatalog-url: https://example.com/models\n"} {
+		if _, err := Load([]byte(withKey + extra)); err == nil {
+			t.Fatalf("invalid catalog-file configuration accepted: %s", extra)
+		}
+	}
+}
 
 func TestLoadMinimalAppliesAllDefaults(t *testing.T) {
 	c, err := Load([]byte(withKey))
