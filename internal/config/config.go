@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -50,6 +51,7 @@ type RouteOverride struct {
 type Config struct {
 	BaseURL          string
 	CatalogURL       string
+	CatalogFile      string
 	ModelPrefix      ModelPrefix
 	APIKeys          []APIKey
 	Catalog          Catalog
@@ -66,6 +68,7 @@ type Config struct {
 type rawConfig struct {
 	BaseURL          *string                  `yaml:"base-url"`
 	CatalogURL       *string                  `yaml:"catalog-url"`
+	CatalogFile      *string                  `yaml:"catalog-file"`
 	ModelPrefix      rawPrefix                `yaml:"model-prefix"`
 	APIKeys          []rawKey                 `yaml:"api-keys"`
 	Catalog          rawCatalog               `yaml:"catalog"`
@@ -128,7 +131,8 @@ func Load(yamlBytes []byte) (Config, error) {
 		return Config{}, fmt.Errorf("request-timeout: must be positive")
 	}
 	c := Config{
-		BaseURL: orDefault(raw.BaseURL, DefaultBaseURL),
+		BaseURL:     orDefault(raw.BaseURL, DefaultBaseURL),
+		CatalogFile: orDefault(raw.CatalogFile, ""),
 		ModelPrefix: ModelPrefix{
 			Enabled: orDefault(raw.ModelPrefix.Enabled, true),
 			Value:   orDefault(raw.ModelPrefix.Value, DefaultModelPrefix),
@@ -147,6 +151,14 @@ func Load(yamlBytes []byte) (Config, error) {
 		AllowHTTP:        raw.AllowHTTP,
 		RequestTimeout:   requestTimeout,
 		MaxResponseBytes: orDefault(raw.MaxResponseBytes, DefaultMaxResponseBytes),
+	}
+	if raw.CatalogFile != nil {
+		if !filepath.IsAbs(c.CatalogFile) {
+			return Config{}, fmt.Errorf("catalog-file: must be an absolute path")
+		}
+		if raw.CatalogURL != nil {
+			return Config{}, fmt.Errorf("catalog-file and catalog-url are mutually exclusive")
+		}
 	}
 	if raw.CatalogURL != nil {
 		// Mirror the derived-default trim so an explicit trailing-slash
