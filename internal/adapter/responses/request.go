@@ -316,7 +316,14 @@ func fromClaudeMessages(upstreamModel string, body []byte, ts *pluginapi.Thinkin
 		TopP:            src.TopP,
 	}
 	req.ToolChoice = respToolChoice(src.ToolChoiceKind, src.ToolChoiceName)
-	if shared.ThinkingEnabled(src.Thinking) {
+	if src.OutputConfig != nil && src.OutputConfig.Effort != "" {
+		if err := thinking.ValidateEffort(src.OutputConfig.Effort, ts); err != nil {
+			return nil, err
+		}
+		if effort, ok := reasoningEffortFor(strings.ToLower(strings.TrimSpace(src.OutputConfig.Effort)), ts); ok {
+			req.Reasoning = map[string]any{"effort": effort}
+		}
+	} else if shared.ThinkingEnabled(src.Thinking) {
 		if effort, ok := reasoningEffortFor(thinking.EffortFromBudget(src.Thinking.BudgetTokens, ts), ts); ok {
 			req.Reasoning = map[string]any{"effort": effort}
 		}
