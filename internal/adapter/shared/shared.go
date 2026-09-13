@@ -679,6 +679,19 @@ func (e ResponsesEventEmitter) Completed(status string, usage ResponsesUsage, ou
 	})
 }
 
+// CompletedEvents closes each announced item before terminating the response.
+// Codex commits assistant text and executes calls from output_item.done; the
+// aggregate output on response.completed alone does not complete those items.
+func (e ResponsesEventEmitter) CompletedEvents(status string, usage ResponsesUsage, output []any) [][]byte {
+	events := make([][]byte, 0, len(output)+1)
+	for index, item := range output {
+		events = append(events, SSEEvent("response.output_item.done", map[string]any{
+			"type": "response.output_item.done", "output_index": index, "item": item,
+		}))
+	}
+	return append(events, e.Completed(status, usage, output))
+}
+
 // RedactedSnippet bearer-redacts and truncates a payload snippet for error
 // messages — never an upstream body echo (FR-011).
 func RedactedSnippet(s string) string {
