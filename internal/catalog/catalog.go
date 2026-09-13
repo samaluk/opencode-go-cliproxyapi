@@ -13,8 +13,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 
@@ -184,11 +186,52 @@ func (m *Manager) SeedFrom(prev *Manager) {
 // catalog.stale-while-unavailable is enabled, otherwise the routable set
 // is cleared until the next success (FR-002).
 func (m *Manager) Refresh(ctx context.Context, apiKey string) error {
+	body, err := m.readCatalog(ctx, apiKey)
+	if err != nil {
+		return m.fail(err.Error())
+	}
+	var env struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil {
+		return m.fail("invalid json")
+	}
+	var entries []rawModel
+	var warns []string
+	if env.Data == nil {
+		warns = append(warns, `upstream catalog response missing "data" field`)
+	} else if err := json.Unmarshal(env.Data, &entries); err != nil {
+		return m.fail("invalid json")
+	}
+	m.swap(entries, warns...)
+	return nil
+}
+
+// readCatalog keeps local snapshots on the same validation and stale-policy
+// path as remote discovery. A configured file is the source, not a fallback
+// that could silently change the advertised catalog after a failed request.
+func (m *Manager) readCatalog(ctx context.Context, apiKey string) ([]byte, error) {
+	budget := max(m.cfg.MaxResponseBytes, catalogBudgetFloor)
+	if m.cfg.CatalogFile != "" {
+		file, err := os.Open(m.cfg.CatalogFile)
+		if err != nil {
+			return nil, fmt.Errorf("cannot open catalog-file")
+		}
+		defer file.Close()
+		body, err := io.ReadAll(io.LimitReader(file, budget+1))
+		if err != nil {
+			return nil, fmt.Errorf("cannot read catalog-file")
+		}
+		if int64(len(body)) > budget {
+			return nil, fmt.Errorf("response exceeds max-response-bytes")
+		}
+		return body, nil
+	}
 	if m.client == nil {
 		// Only direct construction can produce a nil host client
 		// (production always wires the bridge); fail loudly through the
 		// classified path instead of panicking inside Do.
-		return m.fail("host client unavailable")
+		return nil, fmt.Errorf("host client unavailable")
 	}
 	req := pluginapi.HTTPRequest{
 		Method: http.MethodGet,
@@ -200,33 +243,15 @@ func (m *Manager) Refresh(ctx context.Context, apiKey string) error {
 	}
 	resp, err := m.client.Do(ctx, req)
 	if err != nil {
-		return m.fail("network error")
+		return nil, fmt.Errorf("network error")
 	}
-	budget := max(m.cfg.MaxResponseBytes, catalogBudgetFloor)
 	if int64(len(resp.Body)) > budget {
-		return m.fail("response exceeds max-response-bytes")
+		return nil, fmt.Errorf("response exceeds max-response-bytes")
 	}
 	if resp.StatusCode != http.StatusOK {
-		return m.fail(fmt.Sprintf("http %d", resp.StatusCode))
+		return nil, fmt.Errorf("http %d", resp.StatusCode)
 	}
-	var env struct {
-		Data json.RawMessage `json:"data"`
-	}
-	if err := json.Unmarshal(resp.Body, &env); err != nil {
-		return m.fail("invalid json")
-	}
-	var entries []rawModel
-	var warns []string
-	if env.Data == nil {
-		// Key ABSENCE is upstream shape drift, never an intended clear:
-		// clear like an empty plan (swap(nil)) but leave a diagnostic.
-		// A present-but-empty array stays silent (tested-intended state).
-		warns = append(warns, `upstream catalog response missing "data" field`)
-	} else if err := json.Unmarshal(env.Data, &entries); err != nil {
-		return m.fail("invalid json")
-	}
-	m.swap(entries, warns...)
-	return nil
+	return resp.Body, nil
 }
 
 // fail applies the stale policy and returns the classified error.
