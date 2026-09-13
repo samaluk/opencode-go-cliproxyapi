@@ -325,6 +325,13 @@ func fromClaudeMessages(upstreamModel string, body []byte, ts *pluginapi.Thinkin
 
 	for _, m := range src.Messages {
 		switch m.Role {
+		case "system", "developer":
+			text, eErr := shared.ClaudeSystemMessageText(m, EndpointPath)
+			if eErr != nil {
+				return nil, eErr
+			}
+			req.Input = append(req.Input, msgItem(m.Role, []map[string]any{textPart(m.Role, text)}))
+			continue
 		case "user", "assistant":
 		default:
 			return nil, shared.ValidateRole(m.Role, EndpointPath)
