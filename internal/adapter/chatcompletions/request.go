@@ -161,7 +161,12 @@ func claudeToChat(upstreamModel string, body []byte, ts *pluginapi.ThinkingSuppo
 	if len(src.StopSequences) > 0 {
 		out.Stop = src.StopSequences
 	}
-	if shared.ThinkingEnabled(src.Thinking) {
+	if src.OutputConfig != nil && src.OutputConfig.Effort != "" {
+		if err := thinking.ValidateEffort(src.OutputConfig.Effort, ts); err != nil {
+			return nil, err
+		}
+		out.ReasoningEffort = strings.ToLower(strings.TrimSpace(src.OutputConfig.Effort))
+	} else if shared.ThinkingEnabled(src.Thinking) {
 		out.ReasoningEffort = thinking.EffortFromBudget(src.Thinking.BudgetTokens, ts)
 	}
 	applyToolChoiceCC(out, src.ToolChoiceKind, src.ToolChoiceName)
