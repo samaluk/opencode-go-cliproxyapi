@@ -25,10 +25,11 @@ import (
 const ProviderID = "opencode-go"
 
 // pluginName / pluginVersion are reported in registration metadata.
-const (
-	pluginName    = "opencode-go-cliproxyapi"
-	pluginVersion = "0.2.2"
-)
+const pluginName = "opencode-go-cliproxyapi"
+
+// pluginVersion is overridden at release time with -ldflags -X so the
+// registered version matches the release archive and store manifest.
+var pluginVersion = "0.2.2"
 
 // githubRepoURL satisfies the host's validPlugin gate (host.go
 // validPlugin rejects empty Metadata.GitHubRepository).

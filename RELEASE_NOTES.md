@@ -1,5 +1,7 @@
 ## What's Changed
 
+Local contributions retain catalog-file loading, explicit effort metadata, harness environment messages and DeepSeek reasoning across tool turns. Release builds stamp the registered version from the release tag.
+
 ### Bug Fixes
 
 - Preserve Claude image tool results when routing to Chat Completions: retain images in an associated user message after tool replies, preserve text, tool references and error markers, and include images in session derivation. The selected upstream model must support image input.
