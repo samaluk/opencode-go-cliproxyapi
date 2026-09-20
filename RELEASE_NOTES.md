@@ -1,5 +1,7 @@
 ## What's Changed
 
+Local contributions retain catalog-file loading, explicit effort metadata, harness environment messages and DeepSeek reasoning across tool turns. Release builds stamp the registered version from the release tag.
+
 Full OpenAI Codex CLI support across all models: multi-agent namespaces, custom programmatic tools (`exec`), tool call results, and reasoning efforts are fully functional.
 
 ### Bug Fixes
