@@ -1,5 +1,7 @@
 ## What's Changed
 
+Release builds stamp the registered plugin version from the release tag so runtime metadata agrees with downloaded artifacts.
+
 Full OpenAI Codex CLI support across all models: multi-agent namespaces, custom programmatic tools (`exec`), tool call results, and reasoning efforts are fully functional.
 
 ### Bug Fixes
