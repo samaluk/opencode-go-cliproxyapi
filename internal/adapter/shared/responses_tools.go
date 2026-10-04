@@ -160,11 +160,11 @@ func (t *ResponseTools) Normalize(r *ResponsesRequest, target string) ([]RespIte
 			if !normalizeCustomTool(&tool, target) {
 				continue
 			}
-			if wasCustom {
-				if _, ok := t.names[tool.Name]; !ok {
-					t.names[tool.Name] = responseToolIdentity{name: tool.Name, isCustom: true}
-				}
+			id := responseToolIdentity{name: tool.Name, isCustom: wasCustom}
+			if prev, ok := t.names[tool.Name]; ok && prev != id {
+				return nil, errclass.Translation("Responses tool names collide after namespace conversion")
 			}
+			t.names[tool.Name] = id
 			flat = append(flat, tool)
 			continue
 		}
@@ -194,15 +194,24 @@ func (t *ResponseTools) Normalize(r *ResponsesRequest, target string) ([]RespIte
 	}
 	r.Tools = flat
 	for i := range conv {
-		if (conv[i].Type == "function_call" || conv[i].Type == "custom_tool_call") && conv[i].Namespace != "" {
-			id := responseToolIdentity{name: conv[i].Name, namespace: conv[i].Namespace}
-			qualified := qualifiedToolName(conv[i].Name, conv[i].Namespace)
-			if _, ok := t.names[qualified]; !ok {
-				t.names[qualified] = id
-			}
-			conv[i].Name = qualified
-			conv[i].Namespace = ""
+		if conv[i].Type != "function_call" && conv[i].Type != "custom_tool_call" {
+			continue
 		}
+		id := responseToolIdentity{name: conv[i].Name, namespace: conv[i].Namespace, isCustom: conv[i].Type == "custom_tool_call"}
+		wire := conv[i].Name
+		if conv[i].Namespace != "" {
+			wire = qualifiedToolName(conv[i].Name, conv[i].Namespace)
+		}
+		if prev, ok := t.names[wire]; ok {
+			if prev.name != id.name || prev.namespace != id.namespace {
+				return nil, errclass.Translation("Responses tool names collide after namespace conversion")
+			}
+			// Retain the current declaration's custom-tool restoration metadata.
+		} else {
+			t.names[wire] = id
+		}
+		conv[i].Name = wire
+		conv[i].Namespace = ""
 	}
 	if len(r.ToolChoice) > 0 {
 		var tc struct {
@@ -212,8 +221,13 @@ func (t *ResponseTools) Normalize(r *ResponsesRequest, target string) ([]RespIte
 		}
 		if err := json.Unmarshal(r.ToolChoice, &tc); err == nil && tc.Namespace != "" {
 			qualified := qualifiedToolName(tc.Name, tc.Namespace)
-			if _, ok := t.names[qualified]; !ok {
-				t.names[qualified] = responseToolIdentity{name: tc.Name, namespace: tc.Namespace}
+			id := responseToolIdentity{name: tc.Name, namespace: tc.Namespace}
+			if prev, ok := t.names[qualified]; ok {
+				if prev.name != id.name || prev.namespace != id.namespace {
+					return nil, errclass.Translation("Responses tool names collide after namespace conversion")
+				}
+			} else {
+				t.names[qualified] = id
 			}
 			b, _ := json.Marshal(map[string]any{"type": tc.Type, "name": qualified})
 			r.ToolChoice = b
