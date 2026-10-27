@@ -6,7 +6,7 @@ The plugin unifies model discovery, protocol translation, and execution across O
 
 ## The Problem
 
-OpenCode Go exposes models across multiple API protocols (OpenAI Chat Completions `/v1/chat/completions`, Anthropic Messages `/v1/messages`, and OpenAI Responses `/v1/responses`).
+OpenCode Go exposes models across multiple API protocols (OpenAI Chat Completions `/v1/chat/completions`, Anthropic Messages `/v1/messages`, OpenAI Responses `/v1/responses`, and native Google Gemini `generateContent`).
 
 Without this plugin, using OpenCode Go in CLIProxyAPI requires configuring separate provider blocks for each protocol family. This leads to:
 - **Duplicated configuration & keys**: The same API keys must be configured across multiple provider blocks.
@@ -28,6 +28,7 @@ This plugin exposes OpenCode Go as a single provider (`opencode-go`) backed by a
   - OpenAI Chat Completions (`/v1/chat/completions`)
   - Anthropic Messages (`/v1/messages`)
   - OpenAI Responses (`/v1/responses`)
+  - Google Gemini (`/models/{model}:generateContent` and `:streamGenerateContent`)
 - **Thinking & Reasoning Support**: Maps reasoning effort across supported client and upstream formats.
 - **Dynamic Catalog Discovery**: Fetches remote model catalogs with local fallback and custom route overrides.
 - **Multi-Key Auth Scheduling**: Pools multiple API keys with CLIProxyAPI's native scheduler for rotation, retries, and error cooldowns across all protocols.
@@ -71,6 +72,9 @@ plugins:
       # Upstream base URL (default: "https://opencode.ai/zen/go/v1")
       base-url: "https://opencode.ai/zen/go/v1"
 
+      # Native Google endpoint used only by gemini-* routes.
+      gemini-base-url: "https://opencode.ai/inference/go/google/v1beta"
+
       # Optional catalog endpoint override (default: "{base-url}/models")
       # catalog-url: "https://opencode.ai/zen/go/v1/models"
 
@@ -96,9 +100,13 @@ plugins:
         chat-completions: true   # enables models routed to /v1/chat/completions
         messages: true           # enables models routed to /v1/messages
         responses: true          # enables models routed to /v1/responses
+        gemini: true             # enables native Google generateContent routes
 
       # Explicit route overrides per model (takes priority over built-in prefix routing)
       route-overrides:
+        "gemini-custom":
+          protocol: "gemini"
+          endpoint: "/models/{model}:generateContent"
         "custom-model":
           protocol: "messages"           # "chat-completions" | "messages" | "responses"
           endpoint: "/v1/messages"       # must start with /
@@ -115,6 +123,7 @@ plugins:
 |---|---|---|---|
 | `api-keys` | `[]object` | *(Required)* | List of API keys (`- value: "..."`, optional `name: "Personal"`). Supports `${ENV_VAR}` expansion. Duplicates and empty values are rejected. |
 | `base-url` | `string` | `https://opencode.ai/zen/go/v1` | Upstream base URL. Must be valid HTTPS (or HTTP if `allow-http: true`) without query parameters, fragments, or userinfo. |
+| `gemini-base-url` | `string` | `https://opencode.ai/inference/go/google/v1beta` | Native Google endpoint for `gemini-*` routes. An explicit custom `base-url` instead derives a sibling `/v1beta` on that host unless this value is also provided. |
 | `catalog-url` | `string` | `{base-url}/models` | Full URL for catalog discovery. Defaults to `{base-url}/models`. |
 | `model-prefix.enabled` | `bool` | `true` | When `true`, client-facing model names use `<prefix>/<model>`. When `false`, uses bare model IDs. |
 | `model-prefix.value` | `string` | `opencode-go` | Provider prefix string when prefixing is enabled. |
@@ -122,8 +131,9 @@ plugins:
 | `catalog.stale-while-unavailable` | `bool` | `true` | When `true`, serves the last valid catalog snapshot if an update fails. |
 | `protocols.chat-completions` | `bool` | `true` | Protocol switch for Chat Completions endpoints. |
 | `protocols.messages` | `bool` | `true` | Protocol switch for Messages endpoints. |
+| `protocols.gemini` | `bool` | `true` | Protocol switch for native Google Gemini models. |
 | `protocols.responses` | `bool` | `true` | Protocol switch for Responses endpoints. |
-| `route-overrides` | `map` | `{}` | Map of model ID to `{ protocol: "...", endpoint: "..." }` overriding built-in family routing. Valid protocols: `chat-completions`, `messages`, `responses`. |
+| `route-overrides` | `map` | `{}` | Map of model ID to `{ protocol: "...", endpoint: "..." }` overriding built-in family routing. Valid protocols: `chat-completions`, `messages`, `responses`, `gemini`. Gemini endpoints must contain `{model}` and end in `:generateContent`; streaming selects `:streamGenerateContent?alt=sse`. |
 | `request-timeout` | `duration` | `5m` | Upstream HTTP request timeout. Must be positive. |
 | `max-response-bytes` | `int64` | `67108864` (64 MiB) | Maximum non-streaming response body size in bytes. |
 | `allow-http` | `bool` | `false` | When `true`, permits `http://` scheme in `base-url` / `catalog-url` for local testing. |

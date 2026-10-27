@@ -34,6 +34,7 @@ type Route string
 
 const (
 	RouteChatCompletions Route = "chat-completions"
+	RouteGemini          Route = "gemini"
 	RouteMessages        Route = "messages"
 	RouteResponses       Route = "responses"
 )
@@ -44,6 +45,7 @@ var routeEndpoints = map[Route]string{
 	RouteChatCompletions: "/v1/chat/completions",
 	RouteMessages:        "/v1/messages",
 	RouteResponses:       "/v1/responses",
+	RouteGemini:          "/models/{model}:generateContent",
 }
 
 // EndpointPath returns the route's upstream endpoint path, or "" for
@@ -121,6 +123,7 @@ var prefixRoutes = []struct {
 	route  Route
 }{
 	{"muse-spark", RouteResponses},
+	{"gemini-", RouteGemini},
 	{"deepseek", RouteChatCompletions},
 	{"minimax", RouteMessages},
 	{"longcat", RouteChatCompletions},
@@ -281,7 +284,11 @@ func (m *Manager) swap(entries []rawModel, extraWarns ...string) {
 			})
 			continue
 		}
-		if endpoint != "" && endpointEscapesBase(m.cfg.BaseURL, endpoint) {
+		baseURL := m.cfg.BaseURL
+		if route == RouteGemini {
+			baseURL = m.cfg.GeminiBaseURL
+		}
+		if endpoint != "" && endpointEscapesBase(baseURL, endpoint) {
 			// The joined URL must stay on the configured upstream
 			// authority. Override endpoints flow through here, so they
 			// cannot rewrite the URL host — e.g. "/v1@evil.com/x"
@@ -352,6 +359,8 @@ func (m *Manager) protocolEnabled(r Route) bool {
 		return m.cfg.Protocols.ChatCompletions
 	case RouteMessages:
 		return m.cfg.Protocols.Messages
+	case RouteGemini:
+		return m.cfg.Protocols.Gemini
 	case RouteResponses:
 		return m.cfg.Protocols.Responses
 	}

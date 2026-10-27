@@ -15,6 +15,7 @@ import (
 
 // Defaults (spec 04 §2/§4).
 const (
+	DefaultGeminiBaseURL    = "https://opencode.ai/inference/go/google/v1beta"
 	DefaultBaseURL          = "https://opencode.ai/zen/go/v1"
 	DefaultModelPrefix      = "opencode-go"
 	DefaultRefreshInterval  = 15 * time.Minute
@@ -41,6 +42,7 @@ type Protocols struct {
 	ChatCompletions bool
 	Messages        bool
 	Responses       bool
+	Gemini          bool
 }
 
 type RouteOverride struct {
@@ -50,6 +52,7 @@ type RouteOverride struct {
 
 type Config struct {
 	BaseURL          string
+	GeminiBaseURL    string
 	CatalogURL       string
 	ModelPrefix      ModelPrefix
 	APIKeys          []APIKey
@@ -66,6 +69,7 @@ type Config struct {
 // Unknown fields are ignored (host may pass extra keys).
 type rawConfig struct {
 	BaseURL          *string                  `yaml:"base-url"`
+	GeminiBaseURL    *string                  `yaml:"gemini-base-url"`
 	CatalogURL       *string                  `yaml:"catalog-url"`
 	ModelPrefix      rawPrefix                `yaml:"model-prefix"`
 	APIKeys          []rawKey                 `yaml:"api-keys"`
@@ -96,10 +100,11 @@ type rawProtocols struct {
 	ChatCompletions *bool `yaml:"chat-completions"`
 	Messages        *bool `yaml:"messages"`
 	Responses       *bool `yaml:"responses"`
+	Gemini          *bool `yaml:"gemini"`
 }
 
 var (
-	validProtocols = map[string]bool{"chat-completions": true, "messages": true, "responses": true}
+	validProtocols = map[string]bool{"chat-completions": true, "messages": true, "responses": true, "gemini": true}
 )
 
 // Load decodes YAML, expands ${VAR} references in api-key values only,
@@ -130,7 +135,8 @@ func Load(yamlBytes []byte) (Config, error) {
 		return Config{}, fmt.Errorf("request-timeout: must be positive")
 	}
 	c := Config{
-		BaseURL: orDefault(raw.BaseURL, DefaultBaseURL),
+		BaseURL:       orDefault(raw.BaseURL, DefaultBaseURL),
+		GeminiBaseURL: orDefault(raw.GeminiBaseURL, DefaultGeminiBaseURL),
 		ModelPrefix: ModelPrefix{
 			Enabled: orDefault(raw.ModelPrefix.Enabled, true),
 			Value:   orDefault(raw.ModelPrefix.Value, DefaultModelPrefix),
@@ -144,11 +150,18 @@ func Load(yamlBytes []byte) (Config, error) {
 			ChatCompletions: orDefault(raw.Protocols.ChatCompletions, true),
 			Messages:        orDefault(raw.Protocols.Messages, true),
 			Responses:       orDefault(raw.Protocols.Responses, true),
+			Gemini:          orDefault(raw.Protocols.Gemini, true),
 		},
 		RouteOverrides:   raw.RouteOverrides,
 		AllowHTTP:        raw.AllowHTTP,
 		RequestTimeout:   requestTimeout,
 		MaxResponseBytes: orDefault(raw.MaxResponseBytes, DefaultMaxResponseBytes),
+	}
+	if raw.GeminiBaseURL == nil && c.BaseURL != DefaultBaseURL {
+		// A custom upstream remains the trust boundary for every protocol.
+		// Never send its key to the public Go service just because a Gemini
+		// model appeared in that custom catalog.
+		c.GeminiBaseURL = strings.TrimSuffix(strings.TrimRight(c.BaseURL, "/"), "/v1") + "/v1beta"
 	}
 	if raw.CatalogURL != nil {
 		// Mirror the derived-default trim so an explicit trailing-slash
@@ -173,6 +186,9 @@ func PublicID(c Config, upstreamID string) string {
 
 func (c Config) validate() error {
 	if err := validateURL("base-url", c.BaseURL, c.AllowHTTP); err != nil {
+		return err
+	}
+	if err := validateURL("gemini-base-url", c.GeminiBaseURL, c.AllowHTTP); err != nil {
 		return err
 	}
 	if err := validateURL("catalog-url", c.CatalogURL, c.AllowHTTP); err != nil {
@@ -202,6 +218,12 @@ func (c Config) validate() error {
 	for name, o := range c.RouteOverrides {
 		if !validProtocols[o.Protocol] {
 			return fmt.Errorf("route-overrides[%s].protocol: unsupported protocol %q", name, o.Protocol)
+		}
+		if o.Protocol == "gemini" && !strings.Contains(o.Endpoint, "{model}") {
+			return fmt.Errorf("route-overrides[%s].endpoint: Gemini endpoints must contain {model}", name)
+		}
+		if o.Protocol == "gemini" && (!strings.HasSuffix(o.Endpoint, ":generateContent") || strings.ContainsAny(o.Endpoint, "?#")) {
+			return fmt.Errorf("route-overrides[%s].endpoint: Gemini endpoints must end with :generateContent without a query or fragment", name)
 		}
 		if o.Endpoint == "" {
 			return fmt.Errorf("route-overrides[%s].endpoint: must not be empty", name)
