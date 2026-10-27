@@ -257,6 +257,8 @@ func TestLiveGeminiArgon(t *testing.T) {
 				encoded, _ := json.Marshal(payload)
 				req.Body = io.NopCloser(bytes.NewReader(encoded))
 				req.ContentLength = int64(len(encoded))
+				// Scoped gateways require an explicit identity even for one-turn probes.
+				req.Header.Set("X-Session-ID", fmt.Sprintf("argon-smoke-%s-%v-%d", client.name, stream, time.Now().UnixNano()))
 				response, err := (&http.Client{Timeout: 90 * time.Second}).Do(req)
 				if err != nil {
 					t.Fatal(err)
