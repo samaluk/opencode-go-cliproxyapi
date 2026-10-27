@@ -157,7 +157,7 @@ func Load(yamlBytes []byte) (Config, error) {
 		RequestTimeout:   requestTimeout,
 		MaxResponseBytes: orDefault(raw.MaxResponseBytes, DefaultMaxResponseBytes),
 	}
-	if raw.GeminiBaseURL == nil && c.BaseURL != DefaultBaseURL {
+	if raw.GeminiBaseURL == nil && strings.TrimRight(c.BaseURL, "/") != DefaultBaseURL {
 		// A custom upstream remains the trust boundary for every protocol.
 		// Never send its key to the public Go service just because a Gemini
 		// model appeared in that custom catalog.

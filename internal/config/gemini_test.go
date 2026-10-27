@@ -14,6 +14,10 @@ func TestGeminiConfiguration(t *testing.T) {
 	if err != nil || custom.GeminiBaseURL != "https://private.example/prefix/v1beta" {
 		t.Fatalf("custom base escaped its host: %v", err)
 	}
+	trailing, err := Load([]byte("api-keys: [{value: test}]\nbase-url: " + DefaultBaseURL + "/\n"))
+	if err != nil || trailing.GeminiBaseURL != DefaultGeminiBaseURL {
+		t.Fatalf("trailing slash changed native provider: %v", err)
+	}
 	for _, fragment := range []string{
 		"gemini-base-url: http://example.test/v1beta\n",
 		"gemini-base-url: https://user:secret@example.test/v1beta\n",
