@@ -224,6 +224,217 @@ func TestLiveSmokeSuite(t *testing.T) {
 
 // ---- Request Builders ----
 
+// TestLiveGeminiArgon exercises the native Google route through each supported
+// client API. Run with an explicitly selected dogfood host/key and CPA_PREFIX.
+func TestLiveGeminiArgon(t *testing.T) {
+	clients := []struct {
+		name   string
+		build  func(*testing.T, string, bool) (*http.Request, error)
+		plain  func(*testing.T, *http.Response)
+		stream func(*testing.T, *http.Response)
+	}{
+		{"Chat", buildChatRequest, verifyChatNonStream, verifyChatStream},
+		{"Messages", buildMessagesRequest, verifyMessagesNonStream, verifyMessagesStream},
+		{"Responses", buildResponsesRequest, verifyResponsesNonStream, verifyResponsesStream},
+	}
+	for _, client := range clients {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stream=%v", client.name, stream), func(t *testing.T) {
+				req, err := client.build(t, modelID("gemini-4-argon"), stream)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var payload map[string]any
+				if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+					t.Fatal(err)
+				}
+				_ = req.Body.Close()
+				for _, key := range []string{"max_tokens", "max_output_tokens"} {
+					if _, ok := payload[key]; ok {
+						payload[key] = 1024
+					}
+				}
+				encoded, _ := json.Marshal(payload)
+				req.Body = io.NopCloser(bytes.NewReader(encoded))
+				req.ContentLength = int64(len(encoded))
+				response, err := (&http.Client{Timeout: 90 * time.Second}).Do(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer response.Body.Close()
+				if response.StatusCode != http.StatusOK {
+					t.Fatalf("Gemini request failed: HTTP %d", response.StatusCode)
+				}
+				if stream {
+					client.stream(t, response)
+				} else {
+					client.plain(t, response)
+				}
+			})
+		}
+	}
+}
+
+// TestLiveGeminiToolContinuation verifies a real tool-call ID/argument round trip
+// and a streamed answer after the client supplies the tool result.
+func TestLiveGeminiToolContinuation(t *testing.T) {
+	for _, format := range []string{"Chat", "Messages", "Responses"} {
+		t.Run(format, func(t *testing.T) {
+			schema := map[string]any{"type": "object", "properties": map[string]any{"a": map[string]string{"type": "integer"}, "b": map[string]string{"type": "integer"}}, "required": []string{"a", "b"}}
+			prompt := "Call add_two_integers with a=2 and b=3. After its result, reply with only the number."
+			user := map[string]any{"role": "user", "content": prompt}
+			body := map[string]any{"model": modelID("gemini-4-argon"), "messages": []any{user}, "max_tokens": 2048}
+			path := "/v1/chat/completions"
+			switch format {
+			case "Chat":
+				body["tools"] = []any{map[string]any{"type": "function", "function": map[string]any{"name": "add_two_integers", "parameters": schema}}}
+				body["tool_choice"] = map[string]any{"type": "function", "function": map[string]string{"name": "add_two_integers"}}
+			case "Messages":
+				path = "/v1/messages"
+				body["tools"] = []any{map[string]any{"name": "add_two_integers", "input_schema": schema}}
+				body["tool_choice"] = map[string]string{"type": "tool", "name": "add_two_integers"}
+				body["output_config"] = map[string]string{"effort": "low"}
+			case "Responses":
+				path = "/v1/responses"
+				delete(body, "messages")
+				delete(body, "max_tokens")
+				body["input"] = []any{user}
+				body["max_output_tokens"] = 2048
+				body["tools"] = []any{map[string]any{"type": "function", "name": "add_two_integers", "parameters": schema}}
+				body["tool_choice"] = map[string]string{"type": "function", "name": "add_two_integers"}
+			}
+			session := fmt.Sprintf("argon-tool-%s-%d", format, time.Now().UnixNano())
+			post := func(payload map[string]any) *http.Response {
+				t.Helper()
+				raw, _ := json.Marshal(payload)
+				req, _ := http.NewRequest(http.MethodPost, cpaHost+path, bytes.NewReader(raw))
+				req.Header.Set("Authorization", "Bearer "+cpaKey)
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("anthropic-version", "2023-06-01")
+				req.Header.Set("X-Session-ID", session)
+				r, err := (&http.Client{Timeout: 90 * time.Second}).Do(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if r.StatusCode != http.StatusOK {
+					r.Body.Close()
+					t.Fatalf("Gemini tool request failed: HTTP %d", r.StatusCode)
+				}
+				return r
+			}
+			r := post(body)
+			var first map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&first); err != nil {
+				r.Body.Close()
+				t.Fatal(err)
+			}
+			r.Body.Close()
+			var callID, name string
+			var args map[string]any
+			switch format {
+			case "Chat":
+				choices, _ := first["choices"].([]any)
+				if len(choices) == 0 {
+					t.Fatal("missing choices")
+				}
+				message := choices[0].(map[string]any)["message"].(map[string]any)
+				calls, _ := message["tool_calls"].([]any)
+				if len(calls) != 1 {
+					t.Fatal("expected one tool call")
+				}
+				call := calls[0].(map[string]any)
+				callID, _ = call["id"].(string)
+				function := call["function"].(map[string]any)
+				name, _ = function["name"].(string)
+				_ = json.Unmarshal([]byte(function["arguments"].(string)), &args)
+				body["messages"] = []any{user, message, map[string]any{"role": "tool", "tool_call_id": callID, "content": "5"}}
+				body["tool_choice"] = "none"
+			case "Messages":
+				blocks, _ := first["content"].([]any)
+				for _, block := range blocks {
+					m := block.(map[string]any)
+					if m["type"] == "tool_use" {
+						callID, _ = m["id"].(string)
+						name, _ = m["name"].(string)
+						args, _ = m["input"].(map[string]any)
+					}
+				}
+				body["messages"] = []any{user, map[string]any{"role": "assistant", "content": blocks}, map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": callID, "content": "5"}}}}
+				body["tool_choice"] = map[string]string{"type": "none"}
+			case "Responses":
+				items, _ := first["output"].([]any)
+				for _, item := range items {
+					m := item.(map[string]any)
+					if m["type"] == "function_call" {
+						callID, _ = m["call_id"].(string)
+						name, _ = m["name"].(string)
+						_ = json.Unmarshal([]byte(m["arguments"].(string)), &args)
+					}
+				}
+				body["input"] = append(append([]any{user}, items...), map[string]any{"type": "function_call_output", "call_id": callID, "output": "5"})
+				body["tool_choice"] = "none"
+			}
+			if callID == "" || name != "add_two_integers" || args["a"] != float64(2) || args["b"] != float64(3) {
+				t.Fatalf("tool identity or arguments were not preserved (%s)", format)
+			}
+			body["stream"] = true
+			r = post(body)
+			defer r.Body.Close()
+			scanner := bufio.NewScanner(r.Body)
+			scanner.Buffer(make([]byte, 4096), 1<<20)
+			var answer strings.Builder
+			terminal := false
+			for scanner.Scan() {
+				line := scanner.Text()
+				if !strings.HasPrefix(line, "data:") {
+					continue
+				}
+				raw := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+				if raw == "[DONE]" {
+					terminal = true
+					continue
+				}
+				var event map[string]any
+				if json.Unmarshal([]byte(raw), &event) != nil {
+					t.Fatal("malformed client event")
+				}
+				switch format {
+				case "Chat":
+					choices, _ := event["choices"].([]any)
+					if len(choices) > 0 {
+						choice := choices[0].(map[string]any)
+						delta, _ := choice["delta"].(map[string]any)
+						text, _ := delta["content"].(string)
+						answer.WriteString(text)
+					}
+				case "Messages":
+					if event["type"] == "message_stop" {
+						terminal = true
+					}
+					if event["type"] == "content_block_delta" {
+						delta, _ := event["delta"].(map[string]any)
+						if delta["type"] == "text_delta" {
+							text, _ := delta["text"].(string)
+							answer.WriteString(text)
+						}
+					}
+				case "Responses":
+					if event["type"] == "response.completed" {
+						terminal = true
+					}
+					if event["type"] == "response.output_text.delta" {
+						text, _ := event["delta"].(string)
+						answer.WriteString(text)
+					}
+				}
+			}
+			if scanner.Err() != nil || !terminal || strings.TrimSpace(answer.String()) != "5" {
+				t.Fatalf("tool continuation failed: terminal=%v, answer=%q, error=%v", terminal, answer.String(), scanner.Err())
+			}
+		})
+	}
+}
+
 func buildChatRequest(t *testing.T, model string, stream bool) (*http.Request, error) {
 	payload := map[string]any{
 		"model": model,

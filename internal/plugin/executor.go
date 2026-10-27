@@ -21,6 +21,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 
 	"opencode-go-cliproxyapi/internal/adapter/chatcompletions"
+	"opencode-go-cliproxyapi/internal/adapter/gemini"
 	"opencode-go-cliproxyapi/internal/adapter/messages"
 	"opencode-go-cliproxyapi/internal/adapter/responses"
 	"opencode-go-cliproxyapi/internal/adapter/shared"
@@ -42,10 +43,11 @@ type executorRequest struct {
 // resolvedExecution carries everything both execution paths need after
 // model/key resolution succeeded.
 type resolvedExecution struct {
-	cfg   config.Config
-	rec   catalog.ModelRecord
-	key   string
-	tools shared.ResponseTools
+	cfg    config.Config
+	rec    catalog.ModelRecord
+	key    string
+	tools  shared.ResponseTools
+	gemini *gemini.Adapter
 }
 
 // resolveExecution resolves the requested model against the snapshot and
@@ -98,12 +100,12 @@ func (m *Manager) handleExecute(request []byte) ([]byte, error) {
 		return classEnvelope(eErr), nil
 	}
 	debugTrace("executor session mode=%s source_format=%s x_opencode_session=%s fallback=%t", "non-stream", req.SourceFormat, sessionID, sessionID == emptyOpenCodeSessionID)
-	upstreamBody, eErr := buildUpstreamRequest(res.rec.Protocol, res.rec.UpstreamID, req.SourceFormat, req.OriginalRequest, res.rec.Thinking, &res.tools)
+	upstreamBody, eErr := res.buildRequest(req)
 	if eErr != nil {
 		return classEnvelope(eErr), nil
 	}
 
-	url := catalog.JoinUpstreamURL(res.cfg.BaseURL, res.rec.EndpointPath)
+	url := res.upstreamURL(false)
 	debugTrace("executor resolved public_model=%s upstream_model=%s route=%s url=%s key_count=%d", req.Model, res.rec.UpstreamID, res.rec.Protocol, url, len(res.cfg.APIKeys))
 	debugTrace("executor sending non-stream url=%s body_len=%d", url, len(upstreamBody))
 	ctx, cancel := context.WithTimeout(context.Background(), res.cfg.RequestTimeout)
@@ -126,11 +128,35 @@ func (m *Manager) handleExecute(request []byte) ([]byte, error) {
 	if int64(len(resp.Body)) > res.cfg.MaxResponseBytes {
 		return classEnvelope(errclass.Translation("response exceeds max-response-bytes")), nil
 	}
-	converted, eErr := convertNonStream(res.rec.Protocol, req.SourceFormat, resp.StatusCode, resp.Body, &res.tools)
+	converted, eErr := res.convertResponse(req.SourceFormat, resp.StatusCode, resp.Body)
 	if eErr != nil {
 		return classEnvelope(eErr), nil
 	}
 	return okEnvelope(pluginapi.ExecutorResponse{Payload: converted, Headers: resp.Headers}), nil
+}
+
+// Gemini has a protocol-specific endpoint and a request-local translator state.
+// The existing adapters keep their execution and conversion paths unchanged.
+func (res *resolvedExecution) buildRequest(req executorRequest) ([]byte, *errclass.Error) {
+	if res.rec.Protocol == catalog.RouteGemini {
+		res.gemini = gemini.NewAdapter(res.rec.UpstreamID, req.SourceFormat, &res.tools)
+		return res.gemini.BuildRequest(req.OriginalRequest, res.rec.Thinking)
+	}
+	return buildUpstreamRequest(res.rec.Protocol, res.rec.UpstreamID, req.SourceFormat, req.OriginalRequest, res.rec.Thinking, &res.tools)
+}
+
+func (res *resolvedExecution) upstreamURL(stream bool) string {
+	if res.rec.Protocol == catalog.RouteGemini {
+		return catalog.JoinUpstreamURL(res.cfg.GeminiBaseURL, gemini.Endpoint(res.rec.EndpointPath, res.rec.UpstreamID, stream))
+	}
+	return catalog.JoinUpstreamURL(res.cfg.BaseURL, res.rec.EndpointPath)
+}
+
+func (res *resolvedExecution) convertResponse(sourceFormat string, status int, body []byte) ([]byte, *errclass.Error) {
+	if res.gemini != nil {
+		return res.gemini.ConvertNonStreamResponse(status, body)
+	}
+	return convertNonStream(res.rec.Protocol, sourceFormat, status, body, &res.tools)
 }
 
 func buildUpstreamRequest(route catalog.Route, upstreamModel, sourceFormat string, sourceBody []byte, ts *pluginapi.ThinkingSupport, tools ...*shared.ResponseTools) ([]byte, *errclass.Error) {
@@ -147,7 +173,10 @@ func buildUpstreamRequest(route catalog.Route, upstreamModel, sourceFormat strin
 
 func upstreamAuthHeaders(route catalog.Route, key, sessionID string) http.Header {
 	var h http.Header
-	if route == catalog.RouteMessages {
+	if route == catalog.RouteGemini {
+		h = http.Header{}
+		h.Set("x-goog-api-key", key)
+	} else if route == catalog.RouteMessages {
 		h = messages.AuthHeaders(key)
 	} else {
 		// Chat Completions and Responses endpoints are OpenAI-style bearer.
@@ -365,12 +394,12 @@ func (m *Manager) executeStream(req executorRequest) ([]byte, error) {
 		return classEnvelope(eErr), nil
 	}
 	debugTrace("executor session mode=%s source_format=%s x_opencode_session=%s fallback=%t", "stream", req.SourceFormat, sessionID, sessionID == emptyOpenCodeSessionID)
-	upstreamBody, eErr := buildUpstreamRequest(res.rec.Protocol, res.rec.UpstreamID, req.SourceFormat, req.OriginalRequest, res.rec.Thinking, &res.tools)
+	upstreamBody, eErr := res.buildRequest(req)
 	if eErr != nil {
 		return classEnvelope(eErr), nil
 	}
 
-	url := catalog.JoinUpstreamURL(res.cfg.BaseURL, res.rec.EndpointPath)
+	url := res.upstreamURL(true)
 	debugTrace("executor sending stream url=%s body_len=%d", url, len(upstreamBody))
 	ctx, cancel := context.WithTimeout(context.Background(), res.cfg.RequestTimeout)
 	defer cancel()
@@ -433,6 +462,9 @@ func (m *Manager) pumpStream(downID, upstreamID string, res *resolvedExecution, 
 	defer watchdog.Stop()
 
 	conv := newStreamConverter(res.rec.Protocol, sourceFormat, &res.tools)
+	if res.gemini != nil {
+		conv = res.gemini
+	}
 	var (
 		total          int64
 		upstreamClosed bool
@@ -475,7 +507,18 @@ func (m *Manager) pumpStream(downID, upstreamID string, res *resolvedExecution, 
 	}
 	debugTrace("executor stream loop end convDone=%t upstreamClosed=%t", convDone, upstreamClosed)
 	if !convDone && upstreamClosed {
-		if flusher, ok := conv.(interface{ Flush() [][]byte }); ok {
+		if finisher, ok := conv.(interface {
+			Finish() ([][]byte, *errclass.Error)
+		}); ok {
+			flushed, finishErr := finisher.Finish()
+			if finishErr != nil {
+				closeStreams(errclass.Redact(finishErr.Message))
+				return
+			}
+			if emitErr := m.emitAll(downID, flushed); emitErr != nil {
+				closeStreams(errclass.Redact(emitErr.Error()))
+			}
+		} else if flusher, ok := conv.(interface{ Flush() [][]byte }); ok {
 			flushed := flusher.Flush()
 			if emitErr := m.emitAll(downID, flushed); emitErr != nil {
 				closeStreams(errclass.Redact(emitErr.Error()))
