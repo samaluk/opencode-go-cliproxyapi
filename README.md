@@ -87,7 +87,7 @@ plugins:
       # Client-facing model ID prefix configuration
       model-prefix:
         enabled: true           # true -> "opencode-go/<model>", false -> bare "<model>" (default: true)
-        value: "opencode-go"    # prefix name (default: "opencode-go")
+        value: "opencode-go"    # prefix namespace; e.g. "personal/opencode-go" (default: "opencode-go")
 
       # OpenCode Go API keys (at least one required). Supports ${ENV_VAR} expansion.
       api-keys:

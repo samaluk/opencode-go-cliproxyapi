@@ -245,7 +245,7 @@ func (c Config) validate() error {
 		}
 	}
 	if c.ModelPrefix.Enabled && !validPrefix(c.ModelPrefix.Value) {
-		return fmt.Errorf("model-prefix.value: invalid provider-ID characters %q", c.ModelPrefix.Value)
+		return fmt.Errorf("model-prefix.value: invalid model prefix %q", c.ModelPrefix.Value)
 	}
 	return nil
 }
@@ -281,17 +281,17 @@ func validateURL(name, raw string, allowHTTP bool) error {
 	return nil
 }
 
+// Model namespaces are slash-delimited; every segment is a provider-style ID.
 func validPrefix(s string) bool {
-	if s == "" {
-		return false
-	}
-	for i, r := range s {
-		alnum := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9'
-		if i == 0 && !alnum {
+	for _, segment := range strings.Split(s, "/") {
+		if segment == "" {
 			return false
 		}
-		if !alnum && r != '.' && r != '_' && r != '-' {
-			return false
+		for i, r := range segment {
+			alnum := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9'
+			if !alnum && (i == 0 || r != '.' && r != '_' && r != '-') {
+				return false
+			}
 		}
 	}
 	return true

@@ -278,9 +278,9 @@ func TestLoadRejections(t *testing.T) {
 			"route-overrides:\n  bad-model:\n    protocol: responses\n    endpoint: v1/x\n" + withKey,
 			"route-overrides[bad-model].endpoint: must start with /",
 		},
-		{"prefix enabled empty value", "model-prefix:\n  enabled: true\n  value: \"\"\n" + withKey, "model-prefix.value: invalid provider-ID characters"},
-		{"prefix with space", "model-prefix:\n  value: has space\n" + withKey, "model-prefix.value: invalid provider-ID characters"},
-		{"prefix leading dash", "model-prefix:\n  value: -lead\n" + withKey, "model-prefix.value: invalid provider-ID characters"},
+		{"prefix enabled empty value", "model-prefix:\n  enabled: true\n  value: \"\"\n" + withKey, "model-prefix.value: invalid model prefix"},
+		{"prefix with space", "model-prefix:\n  value: has space\n" + withKey, "model-prefix.value: invalid model prefix"},
+		{"prefix leading dash", "model-prefix:\n  value: -lead\n" + withKey, "model-prefix.value: invalid model prefix"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -348,5 +348,20 @@ func TestValidateURLRejectsQueryFragmentUserinfo(t *testing.T) {
 				t.Errorf("error echoes credentials: %q", err.Error())
 			}
 		})
+	}
+}
+
+func TestScopedModelPrefix(t *testing.T) {
+	for _, prefix := range []string{"/personal", "personal/", "personal//opencode-go", "personal/../opencode-go"} {
+		if validPrefix(prefix) {
+			t.Errorf("accepted invalid namespace %q", prefix)
+		}
+	}
+	cfg, err := Load([]byte("api-keys:\n  - value: test-key\nmodel-prefix:\n  value: personal/opencode-go\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := PublicID(cfg, "fixture-model"); got != "personal/opencode-go/fixture-model" {
+		t.Fatalf("PublicID = %q", got)
 	}
 }
